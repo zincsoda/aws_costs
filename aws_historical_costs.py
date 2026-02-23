@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import boto3
 from datetime import date, timedelta
 from calendar import month_name
@@ -37,20 +38,20 @@ def format_percentage(percentage, color=None):
     sign = "+" if percentage > 0 else ""
     return f"{color}{Colors.BOLD}{sign}{percentage:+.2f}%{Colors.RESET}"
 
-def get_last_6_months_ranges():
-    """Get date ranges for the last 6 months"""
+def get_month_ranges(num_months):
+    """Get date ranges for the last num_months months"""
     today = date.today()
     ranges = []
     
-    for i in range(6):
-        # Calculate the start of the month (i months ago)
-        if today.month - i <= 0:
-            year = today.year - 1
-            month = 12 + (today.month - i)
-        else:
-            year = today.year
-            month = today.month - i
-        
+    # Use a linear month index so we correctly go back any number of months
+    total_months = today.year * 12 + today.month
+    for i in range(num_months):
+        target = total_months - i
+        year = target // 12
+        month = target % 12
+        if month == 0:
+            month = 12
+            year -= 1
         start_of_month = date(year, month, 1)
         
         # Calculate the end of the month (start of next month)
@@ -118,13 +119,28 @@ def calculate_statistics(costs):
     }
 
 def main():
+    parser = argparse.ArgumentParser(description="Display AWS historical costs by month.")
+    parser.add_argument(
+        "-m", "--months",
+        type=int,
+        default=12,
+        metavar="N",
+        help="Number of months of cost data to show (default: 12)",
+    )
+    args = parser.parse_args()
+    num_months = args.months
+
+    if num_months < 1:
+        parser.error("--months must be at least 1")
+
     # Initialize Cost Explorer client
     client = boto3.client('ce', region_name='us-east-1')
-    
-    print(f"\n{Colors.BOLD}{Colors.BLUE}================= AWS HISTORICAL COSTS (Last 6 Months) ================={Colors.RESET}")
-    
-    # Get date ranges for last 6 months
-    month_ranges = get_last_6_months_ranges()
+
+    month_label = "Month" if num_months == 1 else "Months"
+    print(f"\n{Colors.BOLD}{Colors.BLUE}================= AWS HISTORICAL COSTS (Last {num_months} {month_label}) ================={Colors.RESET}")
+
+    # Get date ranges for the requested number of months
+    month_ranges = get_month_ranges(num_months)
     costs = []
     
     # Get costs for each month
@@ -154,7 +170,7 @@ def main():
     stats = calculate_statistics(costs)
     
     print(f"\n{Colors.BOLD}{Colors.MAGENTA}📊 SUMMARY STATISTICS{Colors.RESET}")
-    print(f"💰 Total cost (6 months): {format_currency(stats['total'], Colors.MAGENTA)}")
+    print(f"💰 Total cost ({num_months} {month_label.lower()}): {format_currency(stats['total'], Colors.MAGENTA)}")
     print(f"📈 Average monthly cost: {format_currency(stats['average'], Colors.CYAN)}")
     print(f"📉 Lowest month: {format_currency(stats['minimum'], Colors.GREEN)}")
     print(f"📈 Highest month: {format_currency(stats['maximum'], Colors.RED)}")
@@ -162,18 +178,19 @@ def main():
     if stats['avg_change'] != 0:
         print(f"📊 Average month-over-month change: {format_percentage(stats['avg_change'])}")
     
-    # Show trend analysis
+    # Show trend analysis (compare recent half vs older half of period)
     print(f"\n{Colors.BOLD}{Colors.YELLOW}📈 TREND ANALYSIS{Colors.RESET}")
-    recent_3_months = costs[:3]
-    older_3_months = costs[3:6]
-    
-    if older_3_months and recent_3_months:
-        recent_avg = sum(recent_3_months) / len(recent_3_months)
-        older_avg = sum(older_3_months) / len(older_3_months)
-        
+    half = num_months // 2
+    recent_months = costs[:half]
+    older_months = costs[half:num_months]
+
+    if older_months and recent_months:
+        recent_avg = sum(recent_months) / len(recent_months)
+        older_avg = sum(older_months) / len(older_months)
+
         if older_avg > 0:
             trend_change = ((recent_avg - older_avg) / older_avg) * 100
-            print(f"Recent 3 months vs older 3 months: {format_percentage(trend_change)}")
+            print(f"Recent {half} months vs older {half} months: {format_percentage(trend_change)}")
             
             if trend_change > 10:
                 print(f"{Colors.RED}⚠️  Costs are trending upward significantly{Colors.RESET}")
